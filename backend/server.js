@@ -6,6 +6,7 @@ const cors = require("cors");
 const multer  = require('multer');
 const path    = require('path');
 const fs = require("fs");
+const speech = require("@google-cloud/speech");
 
 
 
@@ -46,10 +47,36 @@ app.post('/transcribe', upload.single('file'), async (req, res) => {
     console.log(req.file.path);
 
     try {
-      
+      const client  = new speech.SpeechClient();
+      const fileToTranscribe = fs.readFileSync(req.file.path);
+      const fileBase64 = fileToTranscribe.toString('base64');
+
+      const video = {
+        content : fileBase64
+      }
+
+      const transcriptionConfig = {
+        encoding: 'LINEAR16',
+        sampleRateHertz: 16000,
+        languageCode: 'en-US'
+      }
+
+      const transcriptionRequest = {
+        audio : video,
+        config: transcriptionConfig
+      }
+
+      const [response] = await client.recognize(transcriptionRequest);
+      console.log(response);
+      const transcription = response.results.map(result => result.alternatives[0].transcript).join('\n');
+
+      console.log(`Transcription : ${transcription}`);
+
+      res.send(transcription)
+
     } catch(error) {
       
-      
+      console.log(error)
       
     }
   
