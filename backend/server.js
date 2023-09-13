@@ -7,7 +7,7 @@ const multer  = require('multer');
 const path    = require('path');
 const fs = require("fs");
 const speech = require("@google-cloud/speech");
-const ffmpegStatic = require("ffmpeg-static");
+const ffmpeg = require('ffmpeg-static');
 const {execSync: exec}  = require("child_process");
 const { stderr } = require('process');
 
@@ -35,18 +35,13 @@ const storage = multer.diskStorage({
     cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname))
   }
 })
+//const storage = multer.memoryStorage(); 
 
 const upload = multer({ storage: storage })
 
-//ffmpeg commands runner
-async function ffmpeg(command) {
-  return new Promise((resolve, reject) => {
-    exec(`${ffmpegStatic} ${command}`, (err, stderr, stdout) => {
-      if(err) reject (err)
-      return resolve(stdout);
-    })
-  })
-}
+const client = new speech.SpeechClient({
+  keyFilename: './video-transcriber-lil-0a93cb9d0e37.json'
+});
 
 // Create an index route which returns a welcome message
 app.get('/', (req, res) => {
@@ -56,46 +51,51 @@ app.get('/', (req, res) => {
 // Create a "message" route which returns a JSON response
 app.post('/transcribe', upload.single('file'), async (req, res) => {
 
-    const filePath = req.file.path;
-    console.log(filePath);
+  if (!req.file) {
+    return res.status(400).send('No file uploaded.');
+  }
 
-    //Convert video to audio
-   // await ffmpeg(`-hide_banner -y -i ${filePath} ${filePath}.wav`);
+  const videoFilePath = req.file.path;
+  const audioFilePath = 'temp_audio.wav';
 
-    try {
-      const client  = new speech.SpeechClient();
-      const fileToTranscribe = fs.readFileSync(filePath);
-      //const fileToTranscribe = fs.readFileSync(`${filePath}.wav`);
-      const fileBase64 = fileToTranscribe.toString('base64');
+  fs.writeFileSync(videoFilePath, req.file.buffer);
 
-      const video = {
-        content : fileBase64
+  // Extract audio from video using ffmpeg-static
+  exec(`${ffmpeg} -i ${videoFilePath} -vn -acodec pcm_s16le -ar 16000 -ac 1 ${audioFilePath}`, async (error) => {
+      if (error) {
+          console.error('Error extracting audio:', error);
+          return res.status(500).send('Error extracting audio.');
       }
 
-      const transcriptionConfig = {
-        encoding: 'LINEAR16',
-        sampleRateHertz: 16000,
-        languageCode: 'en-US'
+      const audioBytes = fs.readFileSync(audioFilePath).toString('base64');
+
+      const request = {
+          audio: {
+              content: audioBytes,
+          },
+          config: {
+              encoding: 'LINEAR16',
+              sampleRateHertz: 16000,
+              languageCode: 'en-US',
+          },
+      };
+
+      try {
+          const [response] = await client.recognize(request);
+          const transcription = response.results
+              .map(result => result.alternatives[0].transcript)
+              .join('\n');
+
+          // Clean up temporary files
+          fs.unlinkSync(videoFilePath);
+          fs.unlinkSync(audioFilePath);
+
+          res.send(transcription);
+      } catch (apiError) {
+          console.error('API Error:', apiError);
+          res.status(500).send('Error transcribing audio: ' + apiError.message);
       }
-
-      const transcriptionRequest = {
-        audio : video,
-        config: transcriptionConfig
-      }
-
-      const [response] = await client.recognize(transcriptionRequest);
-      console.log(response);
-      const transcription = response.results.map(result => result.alternatives[0].transcript).join('\n');
-
-      console.log(`Transcription : ${transcription}`);
-
-      res.send(transcription)
-
-    } catch(error) {
-      
-      console.log(error)
-      
-    }
+  });
   
 });
 
