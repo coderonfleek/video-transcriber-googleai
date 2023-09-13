@@ -56,9 +56,9 @@ app.post('/transcribe', upload.single('file'), async (req, res) => {
   }
 
   const videoFilePath = req.file.path;
-  const audioFilePath = 'temp_audio.wav';
+  const audioFilePath = `${videoFilePath}.wav`;
 
-  fs.writeFileSync(videoFilePath, req.file.buffer);
+  //fs.writeFileSync(videoFilePath, req.file.buffer);
 
   // Extract audio from video using ffmpeg-static
   exec(`${ffmpeg} -i ${videoFilePath} -vn -acodec pcm_s16le -ar 16000 -ac 1 ${audioFilePath}`, async (error) => {
