@@ -7,7 +7,8 @@ const multer  = require('multer');
 const path    = require('path');
 const fs = require("fs");
 const speech = require("@google-cloud/speech");
-const ffmpeg = require('ffmpeg-static');
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('ffmpeg-static');
 const {execSync: exec}  = require("child_process");
 const { stderr } = require('process');
 
@@ -24,6 +25,8 @@ app.use(bodyParser.json());
 
 // Setup CORs
 app.use(cors());
+
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 
 // Configure Multer
@@ -60,42 +63,46 @@ app.post('/transcribe', upload.single('file'), async (req, res) => {
 
   //fs.writeFileSync(videoFilePath, req.file.buffer);
 
-  // Extract audio from video using ffmpeg-static
-  exec(`${ffmpeg} -i ${videoFilePath} -vn -acodec pcm_s16le -ar 16000 -ac 1 ${audioFilePath}`, async (error) => {
-      if (error) {
-          console.error('Error extracting audio:', error);
-          return res.status(500).send('Error extracting audio.');
-      }
+  ffmpeg(videoFilePath)
+      .toFormat('wav')
+      .audioCodec('pcm_s16le')
+      .audioFrequency(16000)
+      .audioChannels(1)
+      .on('end', async () => {
+          const audioBytes = fs.readFileSync(audioFilePath).toString('base64');
 
-      const audioBytes = fs.readFileSync(audioFilePath).toString('base64');
+          const request = {
+              audio: {
+                  content: audioBytes,
+              },
+              config: {
+                  encoding: 'LINEAR16',
+                  sampleRateHertz: 16000,
+                  languageCode: 'en-US',
+              },
+          };
 
-      const request = {
-          audio: {
-              content: audioBytes,
-          },
-          config: {
-              encoding: 'LINEAR16',
-              sampleRateHertz: 16000,
-              languageCode: 'en-US',
-          },
-      };
+          try {
+              const [response] = await client.recognize(request);
+              const transcription = response.results
+                  .map(result => result.alternatives[0].transcript)
+                  .join('\n');
 
-      try {
-          const [response] = await client.recognize(request);
-          const transcription = response.results
-              .map(result => result.alternatives[0].transcript)
-              .join('\n');
+              // Clean up temporary files
+              fs.unlinkSync(videoFilePath);
+              fs.unlinkSync(audioFilePath);
 
-          // Clean up temporary files
-          fs.unlinkSync(videoFilePath);
-          fs.unlinkSync(audioFilePath);
-
-          res.send(transcription);
-      } catch (apiError) {
-          console.error('API Error:', apiError);
-          res.status(500).send('Error transcribing audio: ' + apiError.message);
-      }
-  });
+              res.send(transcription);
+          } catch (apiError) {
+              console.error('API Error:', apiError);
+              res.status(500).send('Error transcribing audio: ' + apiError.message);
+          }
+      })
+      .on('error', (err) => {
+          console.error('Error with ffmpeg:', err);
+          res.status(500).send('Error processing video.');
+      })
+      .save(audioFilePath);
   
 });
 
